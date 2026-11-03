@@ -49,6 +49,9 @@ if xcrun vtool -set-build-version ios 15.0 26.5 -replace -output "$APPBIN.vt" "$
   plutil -replace DTPlatformVersion -string "26.5" "$STAGE/Payload/StS2.app/Info.plist" 2>/dev/null
   # 递增 build 号,确保重装覆盖旧版(否则可能装到缓存旧包)
   plutil -replace CFBundleVersion -string "0.107.2" "$STAGE/Payload/StS2.app/Info.plist" 2>/dev/null
+  # 标记为游戏 → 启用 iOS/iPadOS Game Mode(仅 Info.plist,无需 entitlement/profile)
+  plutil -replace LSSupportsGameMode -bool true "$STAGE/Payload/StS2.app/Info.plist" 2>/dev/null
+  plutil -replace LSApplicationCategoryType -string "public.app-category.games" "$STAGE/Payload/StS2.app/Info.plist" 2>/dev/null
   xcrun vtool -show-build "$APPBIN" 2>/dev/null | grep -E "sdk|minos" | sed 's/^/  /'
 else
   echo "  ! vtool 失败,继续(可能仍会在 iOS 27 上崩溃)"

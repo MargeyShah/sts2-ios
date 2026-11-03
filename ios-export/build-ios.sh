@@ -182,6 +182,16 @@ CPPEOF
 fi
 grep -q "load_all_fmod_plugins" "$DUMMY" && ok "FMOD 空实现已注入" || fail "FMOD 注入失败"
 
+step "5.25/6 标记为游戏（启用 iOS/iPadOS Game Mode）"
+# Game Mode 只需 Info.plist 的 LSSupportsGameMode=true（无需 entitlement；WWDC25 里提到的
+# "对应 entitlement" 是给 Sustained Execution Mode 的——那个才需要 provisioning profile 能力，
+# 本移植不用）。同时声明游戏分类，便于系统按游戏对待。Godot 每次导出重生成 Info.plist，故每次必补。
+PLIST="$EXPORT_DIR/build/StS2/StS2-Info.plist"
+[ -f "$PLIST" ] || fail "找不到 $PLIST"
+plutil -replace LSSupportsGameMode -bool true "$PLIST" || fail "写 LSSupportsGameMode 失败"
+plutil -replace LSApplicationCategoryType -string "public.app-category.games" "$PLIST" || fail "写 LSApplicationCategoryType 失败"
+ok "已标记为游戏 (LSSupportsGameMode=true, LSApplicationCategoryType=public.app-category.games)"
+
 step "5.3/6 写内存权限 entitlements（治本:突破 iOS 单app内存上限,否则保存退出/预热 OOM 被杀）"
 # increased-memory-limit 免费账号可用(AltStore v2.2证实),但需 Xcode GUI 或含此entitlement的
 # provisioning profile 才能签(命令行直接 codesign+旧profile 会 ApplicationVerificationFailed)。

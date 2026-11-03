@@ -106,6 +106,9 @@ Order of operations (each step fails loudly and points at a log in `ios-export/.
      pack an empty project: *"Must select at least one file to export"*);
    - fills the iOS preset's **App Store Team ID + bundle id** from `config.sh` for the duration of the
      export (Godot 4.5.1 refuses to export iOS without a Team ID), then restores the template;
+   - marks the app as a game: sets `LSSupportsGameMode=true` + `LSApplicationCategoryType=public.app-category.games`
+     on the generated Info.plist, so iOS/iPadOS enables **Game Mode** when the game is full-screen
+     (Info.plist only — no entitlement or provisioning-profile capability required; see the gotchas table);
    - fixes the generated `pbxproj` (Distribution→Development, pins team/bundle).
    - ⚠️ Godot's iOS export also runs `xcodebuild archive` at the end, which **fails without a signing
      certificate**. That failure is expected — the Xcode project and pck are already fully written.
@@ -133,6 +136,7 @@ Produces `ios-export/build/StS2.ipa` — a **self-contained** app (bundled `StS2
 - re-stamps the executable's `LC_BUILD_VERSION` **SDK to 26.5** and the Info.plist `DTSDKName`/
   `DTPlatformVersion` (needed on iOS 27 — see gotchas below);
 - bumps `CFBundleVersion` so re-installs overwrite;
+- stamps `LSSupportsGameMode=true` + `LSApplicationCategoryType=public.app-category.games` (Game Mode);
 - ad-hoc signs with the `increased-memory-limit` entitlement embedded;
 - zips `Payload/StS2.app` into the IPA.
 
@@ -170,6 +174,7 @@ See [`docs/RENEWAL.md`](docs/RENEWAL.md) and [`docs/DESIGN.md`](docs/DESIGN.md).
 | Spine/FMOD missing at runtime (no audio / no animations) | The `.gdextension` descriptors weren't in the export project, so Godot didn't embed the iOS libs. | `build-ios.sh` extracts them from the user's own pck. |
 | Deploy target error (`IPHONEOS_DEPLOYMENT_TARGET 14.0 … supported 15.0+`) | Xcode 27's minimum is iOS 15.0. | Preset ships `min_ios_version="15.0"`. |
 | First launch is stuttery for a few minutes | `ShaderWarmupPatch` compiles every material/shader once on first boot (from the cold ~2 GB pck) to avoid the shader watchdog. Writes `Documents/shader_warmup_version` when done; later launches skip it. | Let it finish once; subsequent launches are smooth. |
+| App isn't treated as a game (no Game Mode / wrong full-screen & gesture behavior) | Missing `LSSupportsGameMode` Info.plist key (and early iOS 26 builds ignored it — see iOS 26 release notes). | `build-ios.sh` and `make-ipa.sh` set `LSSupportsGameMode=true` + `LSApplicationCategoryType=public.app-category.games`. **No entitlement/profile needed** — the WWDC25 "corresponding entitlement" is only for Sustained Execution Mode, which this port doesn't use. |
 
 ## Save sync (newest-wins)
 
