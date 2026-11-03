@@ -49,6 +49,7 @@ cd "$ROOT" || fail "cd 失败"
 cp "$GAME_DATA/sts2.dll" "$WORK/sts2.dll" || fail "拷贝游戏 sts2.dll 失败"
 dotnet build src/STS2MobileIos -c Release -o "$WORK/mobilepatch-out" >"$WORK/patch-build.log" 2>&1 \
   || fail "补丁库编译失败，见 $WORK/patch-build.log"
+export STS2_REF_DIR="$GAME_DATA"   # 让织入器能解析游戏引用的第三方程序集(如 Sentry.dll)
 dotnet run --project src/STS2Weaver -c Release -- \
   "$WORK/sts2.dll" "$WORK/mobilepatch-out/STS2MobileIos.dll" \
   src/STS2MobileIos/manifest.json "$WOVEN" 2>&1 | tee "$WORK/weave.log" | grep -E "\[FAIL\]|完成"
@@ -81,7 +82,18 @@ mkdir -p "$ADDONS/spine/ios" "$ADDONS/fmod/libs/ios"
 cp -R "$STS2_IOS_LIBS_DIR/libspine_godot.ios.template_release.framework" "$ADDONS/spine/ios/"
 cp -R "$STS2_IOS_LIBS_DIR/libGodotFmod.ios.template_release.xcframework" "$ADDONS/fmod/libs/ios/"
 cp "$STS2_FMOD_STATIC_DIR/"libfmod{,studio}_iphoneos.a "$ADDONS/fmod/libs/ios/" 2>/dev/null
-ok "GDExtension 库就位"
+# 关键: Godot 的 iOS 导出靠工程里的 .gdextension 描述符来"发现"并内嵌 GDExtension 的 iOS 库。
+# 这些描述符在游戏自己的 pck 里(其 ios.release 路径正好等于本步放置库的位置),从用户自己的
+# pck 提取到工程(纯配置文本,非游戏资产,不入库)。缺了它们 Godot 会静默不内嵌 → 运行期崩。
+GAME_PCK="$GAME/Slay the Spire 2.pck"
+[ -f "$GAME_PCK" ] || fail "游戏 pck 缺失: $GAME_PCK"
+python3 "$ROOT/tools/pck_ls.py" "$GAME_PCK" x "addons/fmod/fmod.gdextension" "$EXPORT_DIR" >/dev/null 2>&1 \
+  || fail "从 pck 提取 fmod.gdextension 失败"
+python3 "$ROOT/tools/pck_ls.py" "$GAME_PCK" x "addons/spine/spine_godot_extension.gdextension" "$EXPORT_DIR" >/dev/null 2>&1 \
+  || fail "从 pck 提取 spine_godot_extension.gdextension 失败"
+{ [ -f "$ADDONS/fmod/fmod.gdextension" ] && [ -f "$ADDONS/spine/spine_godot_extension.gdextension" ]; } \
+  || fail ".gdextension 描述符未就位(Godot 将无法内嵌 GDExtension 库)"
+ok "GDExtension 库就位(含从 pck 提取的 .gdextension 描述符)"
 
 step "4/6 dotnet publish（NativeAOT 预编译织入程序集 → sts2.framework）"
 cd "$EXPORT_DIR" || fail "cd 失败"
@@ -97,12 +109,50 @@ file "$PUB_DIR/sts2.dylib" | grep -q "arm64" || fail "sts2.dylib 不是 arm64"
 ok "sts2.framework 预编译完成: $(du -h "$PUB_DIR/sts2.dylib" | cut -f1) arm64 原生库"
 
 step "5/6 Godot 导出 iOS 工程"
+# Godot 4.5.1 拒绝打包"空工程"(Must select at least one file to export)。本工程是驱动壳,
+# 游戏内容来自游戏自己的 pck;但 project.godot 引用的 icon/主场景占位必须存在,否则 pck 0 文件。
+# 幂等补齐(占位不含任何游戏资产)。
+if [ ! -f "$EXPORT_DIR/icon.png" ]; then
+  python3 - "$EXPORT_DIR/icon.png" <<'PY'
+import struct, zlib, sys
+w = h = 128
+row = b"\x00" + bytes((0x33, 0x33, 0x66, 0xFF)) * w
+raw = row * h
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+png = (b"\x89PNG\r\n\x1a\n"
+       + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw, 9))
+       + chunk(b"IEND", b""))
+open(sys.argv[1], "wb").write(png)
+PY
+  ok "补 icon.png 占位(导出所需,非游戏资产)"
+fi
+mkdir -p "$EXPORT_DIR/scenes"
+if [ ! -f "$EXPORT_DIR/scenes/game.tscn" ]; then
+  printf '[gd_scene format=3]\n\n[node name="Game" type="Node"]\n' > "$EXPORT_DIR/scenes/game.tscn"
+  ok "补 scenes/game.tscn 占位(导出所需,非游戏资产)"
+fi
 mkdir -p "$EXPORT_DIR/build"
+# Godot 4.5.1 在导出前校验收据: iOS 预设必须已填 App Store Team ID, 否则直接报
+# "App Store Team ID not specified" 并拒绝导出。该值来自 config.sh(个人身份, 不入库),
+# 故导出前临时写入 export_presets.cfg, 退出时还原(保持被 git 跟踪的模板文件干净)。
+PRESET="$EXPORT_DIR/export_presets.cfg"
+cp "$PRESET" "$WORK/export_presets.cfg.bak"
+restore_preset(){ cp "$WORK/export_presets.cfg.bak" "$PRESET"; }
+trap restore_preset EXIT
+sed -i '' "s|^application/app_store_team_id=.*|application/app_store_team_id=\"${STS2_TEAM_ID}\"|" "$PRESET"
+sed -i '' "s|^application/bundle_identifier=.*|application/bundle_identifier=\"${STS2_BUNDLE_ID}\"|" "$PRESET"
+grep -q "app_store_team_id=\"${STS2_TEAM_ID}\"" "$PRESET" && ok "iOS 预设已临时填入 Team ID / bundle（导出后还原）"
 # 导出 Xcode 工程（--main-pack 是运行时参数不是导出参数,不能放这里;
 # 游戏内容通过 step 5.5 替换 pck 进入应用包）
 "$GODOT" --headless --path "$EXPORT_DIR" \
   --export-release "iOS" "$EXPORT_DIR/build/StS2.ipa" 2>&1 | tee "$WORK/export.log" | tail -8
 [ -d "$EXPORT_DIR/build/StS2.xcodeproj" ] || fail "Godot 未生成 Xcode 工程，见 $WORK/export.log"
+# Godot 4.5.1 的 iOS 导出会在生成工程后自动跑 `xcodebuild archive`；无签名证书时该步必失败,
+# 但工程/pck 已写好(仓库一贯如此,后续自己用 xcodebuild 无签名构建)。故只校验工程确实完整生成。
+[ -f "$EXPORT_DIR/build/StS2/StS2-Info.plist" ] || fail "Godot 未完整生成 iOS 工程(见 $WORK/export.log)"
+grep -q "ARCHIVE FAILED\|Project export for preset" "$WORK/export.log" 2>/dev/null && echo "  (注: 导出末段 xcodebuild archive 因无签名失败——符合预期,工程已完整生成)"
 ok "Xcode 工程已生成"
 
 step "5.15/6 修 pbxproj 签名（Godot 每次导出重生成工程: Distribution→Development + 钉死团队）"

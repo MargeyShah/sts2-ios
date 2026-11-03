@@ -36,3 +36,8 @@ ios-export/.work/
 *.log
 *.pid
 save_backups/
+
+# --- 生成/占位资源（build-ios.sh 会自动补；图标常来自游戏/第三方美术,不入库）---
+ios-export/icon.png
+ios-export/icon.png.import
+ios-export/scenes/

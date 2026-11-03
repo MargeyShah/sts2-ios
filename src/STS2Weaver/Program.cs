@@ -29,6 +29,11 @@ string targetPath = args[0], hooksPath = args[1], manifestPath = args[2], output
 var resolver = new DefaultAssemblyResolver();
 resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(targetPath)));
 resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(hooksPath)));
+// 游戏主程序集引用了同目录下的第三方程序集(如 Sentry.dll);织入后写元数据时需解析它们,
+// 故额外把游戏数据目录加进搜索路径(build-ios.sh 经 STS2_REF_DIR 传入)。缺省时仍按原两处搜索。
+var refDir = Environment.GetEnvironmentVariable("STS2_REF_DIR");
+if (!string.IsNullOrEmpty(refDir) && Directory.Exists(refDir))
+    resolver.AddSearchDirectory(refDir);
 
 var readParams = new ReaderParameters { AssemblyResolver = resolver, ReadWrite = false };
 var targetAsm = AssemblyDefinition.ReadAssembly(targetPath, readParams);

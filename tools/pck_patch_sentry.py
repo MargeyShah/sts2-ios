@@ -14,7 +14,7 @@ Three in-place edits (all offsets of untouched file data preserved):
 
 Usage: pck_patch_sentry.py <src.pck> <dst.pck>
 """
-import struct, sys, os, shutil, hashlib
+import struct, sys, os, shutil, hashlib, re
 
 def u32(b, o): return struct.unpack_from("<I", b, o)[0]
 
@@ -75,16 +75,21 @@ def patch(src, dst):
     ext[3] = len(new); ext[4] = hashlib.md5(new).digest()
     print(f"extension_list.cfg: {sz} -> {len(new)} bytes")
 
-    # 2. project.binary: neutralize the SentryInit autoload key (same length)
+    # 2. project.binary: neutralize every autoload/Sentry* key (same length).
+    #    游戏版本间 autoload 名会变(旧版 SentryInit, 新版 SentryBootstrap),故按前缀通配全部。
     po = abs_off(proj[2]); psz = proj[3]
     f.seek(po); pdata = bytearray(f.read(psz))
-    k = pdata.find(b"autoload/SentryInit")
-    assert k >= 0, "autoload/SentryInit key not found in project.binary"
-    pdata[k:k + 8] = b"xutoload"          # 'autoload' -> 'xutoload'
-    assert pdata.find(b"autoload/SentryInit") == -1
+    hits = list(re.finditer(rb"autoload/Sentry[A-Za-z0-9_]*", pdata))
+    assert hits, "no autoload/Sentry* key found in project.binary"
+    names = []
+    for m in hits:
+        k = m.start()
+        names.append(bytes(pdata[k:k + 32]).split(b"\x00")[0].decode("utf-8", "replace"))
+        pdata[k:k + 8] = b"xutoload"          # 'autoload' -> 'xutoload'
+    assert not re.search(rb"autoload/Sentry", pdata)
     f.seek(po); f.write(pdata)
     proj[4] = hashlib.md5(bytes(pdata)).digest()
-    print(f"project.binary: disabled autoload/SentryInit (same-length rename)")
+    print(f"project.binary: disabled autoload(s) {names} (same-length rename)")
 
     # 3. remove sentry.gdextension entry, rewrite directory, truncate
     del entries[sentry_idx]
